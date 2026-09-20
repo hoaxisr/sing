@@ -9,6 +9,7 @@ import (
 )
 
 type syscallPacketBatchOffload struct {
+	checked  bool
 	disabled bool
 	messages []mmsghdr
 	controls [][24]byte
@@ -20,6 +21,16 @@ func (o *syscallPacketBatchOffload) reset() {
 }
 
 func (o *syscallPacketBatchOffload) send(descriptor int, messages []mmsghdr, flags int) (int, syscall.Errno) {
+	if !o.checked {
+		o.checked = true
+		// Kernels older than 4.18 have no UDP_SEGMENT: ip_cmsg_send skips any
+		// control message whose level is not SOL_IP instead of rejecting it, so
+		// the segment size is dropped while iovlen stays, and the batch leaves
+		// the box as a single concatenated datagram. sendmmsg reports success,
+		// so the errno fallback below never fires. Ask the kernel for the
+		// option itself: it answers ENOPROTOOPT where the cmsg would be ignored.
+		o.disabled = unix.SetsockoptInt(descriptor, unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0) != nil
+	}
 	if o.disabled || len(messages) < 2 {
 		return sendmmsg(descriptor, messages, flags)
 	}
