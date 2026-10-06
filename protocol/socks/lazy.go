@@ -3,6 +3,8 @@ package socks
 import (
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
@@ -13,7 +15,8 @@ import (
 type LazyConn struct {
 	net.Conn
 	socksVersion    byte
-	responseWritten bool
+	access          sync.Mutex
+	responseWritten atomic.Bool
 }
 
 func NewLazyConn(conn net.Conn, socksVersion byte) *LazyConn {
@@ -24,12 +27,15 @@ func NewLazyConn(conn net.Conn, socksVersion byte) *LazyConn {
 }
 
 func (c *LazyConn) ConnHandshakeSuccess(conn net.Conn) error {
-	if c.responseWritten {
+	if c.responseWritten.Load() {
 		return nil
 	}
-	defer func() {
-		c.responseWritten = true
-	}()
+	c.access.Lock()
+	defer c.access.Unlock()
+	if c.responseWritten.Load() {
+		return nil
+	}
+	defer c.responseWritten.Store(true)
 	switch c.socksVersion {
 	case socks4.Version:
 		return socks4.WriteResponse(c.Conn, socks4.Response{
@@ -47,12 +53,12 @@ func (c *LazyConn) ConnHandshakeSuccess(conn net.Conn) error {
 }
 
 func (c *LazyConn) HandshakeFailure(err error) error {
-	if c.responseWritten {
+	c.access.Lock()
+	defer c.access.Unlock()
+	if c.responseWritten.Load() {
 		return os.ErrInvalid
 	}
-	defer func() {
-		c.responseWritten = true
-	}()
+	defer c.responseWritten.Store(true)
 	switch c.socksVersion {
 	case socks4.Version:
 		return socks4.WriteResponse(c.Conn, socks4.Response{
@@ -68,31 +74,27 @@ func (c *LazyConn) HandshakeFailure(err error) error {
 }
 
 func (c *LazyConn) Read(p []byte) (n int, err error) {
-	if !c.responseWritten {
-		err = c.ConnHandshakeSuccess(c.Conn)
-		if err != nil {
-			return
-		}
+	err = c.ConnHandshakeSuccess(c.Conn)
+	if err != nil {
+		return
 	}
 	return c.Conn.Read(p)
 }
 
 func (c *LazyConn) Write(p []byte) (n int, err error) {
-	if !c.responseWritten {
-		err = c.ConnHandshakeSuccess(c.Conn)
-		if err != nil {
-			return
-		}
+	err = c.ConnHandshakeSuccess(c.Conn)
+	if err != nil {
+		return
 	}
 	return c.Conn.Write(p)
 }
 
 func (c *LazyConn) ReaderReplaceable() bool {
-	return c.responseWritten
+	return c.responseWritten.Load()
 }
 
 func (c *LazyConn) WriterReplaceable() bool {
-	return c.responseWritten
+	return c.responseWritten.Load()
 }
 
 func (c *LazyConn) Upstream() any {
