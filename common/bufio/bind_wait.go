@@ -60,3 +60,27 @@ func (w *serverPacketReadWaiter) WaitReadBuffer() (buffer *buf.Buffer, err error
 	w.updateRemoteAddr(destination)
 	return
 }
+
+var _ N.PacketBatchReadWaiter = (*serverPacketBatchReadWaiter)(nil)
+
+type serverPacketBatchReadWaiter struct {
+	conn       *serverPacketConn
+	readWaiter N.PacketBatchReadWaiter
+}
+
+func (w *serverPacketBatchReadWaiter) InitializeReadWaiter(options N.ReadWaitOptions) (needCopy bool) {
+	return w.readWaiter.InitializeReadWaiter(options)
+}
+
+func (w *serverPacketBatchReadWaiter) WaitReadPackets() ([]*buf.Buffer, []M.Socksaddr, error) {
+	buffers, destinations, err := w.readWaiter.WaitReadPackets()
+	if err != nil {
+		return nil, nil, err
+	}
+	w.conn.updateRemoteAddr(destinations[len(destinations)-1])
+	return buffers, destinations, nil
+}
+
+func (w *serverPacketBatchReadWaiter) Upstream() any {
+	return w.readWaiter
+}

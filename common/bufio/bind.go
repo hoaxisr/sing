@@ -188,5 +188,9 @@ func (c *serverPacketConn) CreateReadWaiter() (N.ReadWaiter, bool) {
 }
 
 func (c *serverPacketConn) CreatePacketBatchReadWaiter() (N.PacketBatchReadWaiter, bool) {
-	return CreatePacketBatchReadWaiter(c.NetPacketConn)
+	readWaiter, isReadWaiter := CreatePacketBatchReadWaiter(c.NetPacketConn)
+	if !isReadWaiter {
+		return nil, false
+	}
+	return &serverPacketBatchReadWaiter{c, readWaiter}, true
 }
